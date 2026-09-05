@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from 'react';
 import * as db from '../db/database';
 import { extractMetadata } from '../utils/metadata';
-import { apiFetch } from '../utils/api';
+import { apiFetch, getAbsoluteApiUrl } from '../utils/api';
 import { fetchLyricsForSong } from '../utils/lyricsApi';
 import { resolveCoverArt, fetchCoverBlob } from '../utils/coverResolver';
 
@@ -89,6 +89,60 @@ export function PlayerProvider({ children }) {
         if (localStorage.getItem('clear_songs_user_requested_v1') !== 'true') {
           localStorage.setItem('clear_songs_user_requested_v1', 'true');
           await db.clearAllSongs();
+        }
+
+        // Recover any background fetch responses from cache
+        if (typeof window !== 'undefined' && 'caches' in window) {
+          try {
+            const cache = await caches.open('marcosmusic-downloads-v1').catch(() => null);
+            if (cache) {
+              const keys = await cache.keys();
+              for (const req of keys) {
+                const match = req.url.match(/\/bg-download\/(.+)$/);
+                if (match) {
+                  const fetchId = match[1];
+                  const resp = await cache.match(req);
+                  if (resp && resp.ok) {
+                    const audioBlob = await resp.blob();
+                    const queueItems = await db.getAllQueueItems();
+                    const qItem = queueItems.find((it) => it.id === fetchId);
+                    if (qItem && qItem.status !== 'completed') {
+                      const safeTitle = (qItem.title || 'Música').replace(/[/\\?%*:|"<>]/g, '-');
+                      const safeArtist = (qItem.artist || 'Artista').replace(/[/\\?%*:|"<>]/g, '-');
+                      const songId = 'sp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+                      const newSong = {
+                        id: songId,
+                        title: qItem.title,
+                        artist: qItem.artist,
+                        album: qItem.album || 'Single',
+                        duration: qItem.duration || 0,
+                        fileBlob: audioBlob,
+                        fileType: audioBlob.type || 'audio/mp4',
+                        fileName: `${safeTitle} - ${safeArtist}.m4a`,
+                        fileSize: audioBlob.size,
+                        coverUrl: qItem.coverUrl || null,
+                        coverBlob: null,
+                        isLiked: false,
+                        dateAdded: new Date().toISOString(),
+                      };
+
+                      await db.saveSong(newSong);
+                      await db.saveQueueItem({
+                        ...qItem,
+                        status: 'completed',
+                        savedSongId: songId,
+                        completedAt: new Date().toISOString(),
+                      });
+                    }
+                    await cache.delete(req);
+                  }
+                }
+              }
+            }
+          } catch (cacheErr) {
+            console.warn('Cache recovery check completed:', cacheErr);
+          }
         }
 
         const [loadedSongs, loadedPlaylists, loadedQueue] = await Promise.all([
@@ -958,14 +1012,136 @@ export function PlayerProvider({ children }) {
 
   // ================= Background Download Queue Manager =================
 
+  const wakeLockRef = useRef(null);
+
+  const requestWakeLock = async () => {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && !wakeLockRef.current) {
+      try {
+        wakeLockRef.current = await navigator.wakeLock.request('screen');
+        wakeLockRef.current.addEventListener('release', () => {
+          wakeLockRef.current = null;
+        });
+      } catch (e) {
+        // Wake lock can fail if battery saver is on, harmless to catch
+      }
+    }
+  };
+
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch (e) {}
+      wakeLockRef.current = null;
+    }
+  };
+
+  // Sync downloads completed by Service Worker in background (even with app closed)
+  const syncBackgroundDownloads = async () => {
+    try {
+      if (typeof window !== 'undefined' && 'caches' in window) {
+        const cache = await caches.open('marcosmusic-downloads-v1').catch(() => null);
+        if (cache) {
+          const keys = await cache.keys();
+          for (const req of keys) {
+            const match = req.url.match(/\/bg-download\/(.+)$/);
+            if (match) {
+              const fetchId = match[1];
+              const resp = await cache.match(req);
+              if (resp && resp.ok) {
+                const audioBlob = await resp.blob();
+                const queueItems = await db.getAllQueueItems();
+                const qItem = queueItems.find((it) => it.id === fetchId);
+                if (qItem && qItem.status !== 'completed') {
+                  const safeTitle = (qItem.title || 'Música').replace(/[/\\?%*:|"<>]/g, '-');
+                  const safeArtist = (qItem.artist || 'Artista').replace(/[/\\?%*:|"<>]/g, '-');
+                  const songId = 'sp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+                  const newSong = {
+                    id: songId,
+                    title: qItem.title,
+                    artist: qItem.artist,
+                    album: qItem.album || 'Single',
+                    duration: qItem.duration || 0,
+                    fileBlob: audioBlob,
+                    fileType: audioBlob.type || 'audio/mp4',
+                    fileName: `${safeTitle} - ${safeArtist}.m4a`,
+                    fileSize: audioBlob.size,
+                    coverUrl: qItem.coverUrl || null,
+                    coverBlob: null,
+                    isLiked: false,
+                    dateAdded: new Date().toISOString(),
+                  };
+
+                  await db.saveSong(newSong);
+
+                  const completedItem = {
+                    ...qItem,
+                    status: 'completed',
+                    savedSongId: songId,
+                    completedAt: new Date().toISOString(),
+                  };
+                  await db.saveQueueItem(completedItem);
+
+                  if (qItem.playlistId) {
+                    await addTrackToPlaylist(qItem.playlistId, songId);
+                  }
+                }
+                await cache.delete(req);
+              }
+            }
+          }
+        }
+      }
+
+      // Reload latest data from IndexedDB
+      const [latestSongs, latestQueue, latestPlaylists] = await Promise.all([
+        db.getAllSongs(),
+        db.getAllQueueItems(),
+        db.getAllPlaylists(),
+      ]);
+
+      setSongs(latestSongs || []);
+      setPlaylists(latestPlaylists || []);
+
+      const sanitizedQueue = (latestQueue || []).map((it) => {
+        if (it.status === 'downloading') {
+          return { ...it, status: 'pending' };
+        }
+        return it;
+      });
+      setDownloadQueue(sanitizedQueue);
+    } catch (err) {
+      console.warn('Erro ao sincronizar downloads de background:', err);
+    }
+  };
+
+  // Listen to Service Worker completion messages
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const handleSwMessage = (event) => {
+        if (event.data?.type === 'BG_FETCH_SUCCESS' || event.data?.type === 'BG_FETCH_FAIL') {
+          syncBackgroundDownloads();
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      return () => navigator.serviceWorker.removeEventListener('message', handleSwMessage);
+    }
+  }, []);
+
   const processDownloadQueue = async () => {
     if (isProcessingQueueRef.current || isQueuePaused) return;
 
     // Find next pending item from IndexedDB
     const currentQueue = await db.getAllQueueItems();
     const nextItem = currentQueue.find((item) => item.status === 'pending');
-    if (!nextItem) return;
+    if (!nextItem) {
+      releaseWakeLock();
+      return;
+    }
 
+    // Keep screen awake while downloading
+    requestWakeLock();
     isProcessingQueueRef.current = true;
 
     const updatingItem = {
@@ -978,6 +1154,61 @@ export function PlayerProvider({ children }) {
       prev.map((it) => (it.id === nextItem.id ? updatingItem : it))
     );
 
+    // 1. Try Native Background Fetch API (Android Chrome/Edge)
+    // Downloads execute at Android OS level even if browser/app is closed
+    let usedBgFetch = false;
+    if (
+      typeof window !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      'BackgroundFetchManager' in window
+    ) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        if (registration && registration.backgroundFetch) {
+          // Pre-resolve cover art if missing or generic
+          let finalCoverUrl = nextItem.coverUrl;
+          if (!finalCoverUrl || finalCoverUrl.includes('mosaic.scdn.co')) {
+            try {
+              const resolved = await resolveCoverArt(nextItem.title, nextItem.artist);
+              if (resolved?.coverUrl) finalCoverUrl = resolved.coverUrl;
+            } catch (e) {}
+          }
+
+          const queryParams = new URLSearchParams({
+            title: nextItem.title,
+            artist: nextItem.artist,
+            duration: nextItem.duration || 0,
+          });
+          const downloadUrl = getAbsoluteApiUrl(`/api/spotify/download-track?${queryParams.toString()}`);
+
+          await registration.backgroundFetch.fetch(
+            nextItem.id,
+            [downloadUrl],
+            {
+              title: `${nextItem.title} - ${nextItem.artist}`,
+              icons: finalCoverUrl ? [{ src: finalCoverUrl, sizes: '192x192', type: 'image/jpeg' }] : [],
+              downloadTotal: (nextItem.duration || 180) * 32000,
+            }
+          );
+          usedBgFetch = true;
+          console.info(`Background Fetch iniciado para "${nextItem.title}"`);
+        }
+      } catch (bgErr) {
+        console.warn('Background Fetch falhou ou não suportado, usando fallback in-app:', bgErr);
+        usedBgFetch = false;
+      }
+    }
+
+    if (usedBgFetch) {
+      isProcessingQueueRef.current = false;
+      // Stagger next queue item
+      setTimeout(() => {
+        processDownloadQueue();
+      }, 1200);
+      return;
+    }
+
+    // 2. Standard Fallback Download (iOS Safari, Firefox, Desktop)
     try {
       const savedSong = await downloadSpotifyTrack(nextItem.track);
       if (nextItem.playlistId && savedSong) {
@@ -1008,10 +1239,15 @@ export function PlayerProvider({ children }) {
       );
     } finally {
       isProcessingQueueRef.current = false;
-      // Trigger next item in queue
-      setTimeout(() => {
-        processDownloadQueue();
-      }, 300);
+      const remaining = await db.getAllQueueItems();
+      const hasPending = remaining.some((it) => it.status === 'pending');
+      if (hasPending && !isQueuePaused) {
+        setTimeout(() => {
+          processDownloadQueue();
+        }, 300);
+      } else {
+        releaseWakeLock();
+      }
     }
   };
 
@@ -1026,7 +1262,9 @@ export function PlayerProvider({ children }) {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && !isQueuePaused) {
-        processDownloadQueue();
+        syncBackgroundDownloads().then(() => {
+          processDownloadQueue();
+        });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);

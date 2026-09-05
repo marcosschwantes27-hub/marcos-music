@@ -48,3 +48,25 @@ export async function apiFetch(path, options = {}) {
 
   return fetch(directUrl, options);
 }
+
+/**
+ * Returns a fully-qualified absolute URL for backend endpoints,
+ * required by Background Fetch API and Service Worker fetch.
+ */
+export function getAbsoluteApiUrl(path) {
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    return path;
+  }
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const configuredApiUrl =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('custom_backend_url')) ||
+    import.meta.env.VITE_API_URL ||
+    'https://marcos-music.onrender.com';
+
+  if (configuredApiUrl) {
+    return `${configuredApiUrl.replace(/\/+$/, '')}${cleanPath}`;
+  }
+  const host = (typeof window !== 'undefined' && window.location.hostname) || '127.0.0.1';
+  return `http://${host}:8085${cleanPath}`;
+}
+
