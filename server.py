@@ -376,10 +376,22 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
                     'outtmpl': out_tmpl,
                     'noplaylist': True,
                     'quiet': True,
+                    'no_warnings': True,
                     'ignoreerrors': True,
                     'max_downloads': 1,
                     'overwrites': True,
                     'progress_hooks': [on_progress_hook],
+                    'geo_bypass': True,
+                    'nocheckcertificate': True,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+                    },
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['ios', 'mweb'],
+                        }
+                    },
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
