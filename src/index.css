@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  user-select: none;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #121212;
+  color: #ffffff;
+  font-family: 'SpotifyMixUI', 'CircularSp', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Spotify styled custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Custom Spotify Range Slider (Seekbar / Volume) */
+input[type="range"].spotify-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  height: 14px;
+}
+
+input[type="range"].spotify-slider:focus {
+  outline: none;
+}
+
+/* Slider Track */
+input[type="range"].spotify-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: #4d4d4d;
+  transition: background-color 0.15s ease;
+}
+
+/* Slider Thumb (Circle on hover) */
+input[type="range"].spotify-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  margin-top: -4px;
+  opacity: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+.group:hover input[type="range"].spotify-slider::-webkit-slider-thumb,
+input[type="range"].spotify-slider:hover::-webkit-slider-thumb,
+input[type="range"].spotify-slider:active::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+.group:hover input[type="range"].spotify-slider::-webkit-slider-runnable-track,
+input[type="range"].spotify-slider:hover::-webkit-slider-runnable-track {
+  background: #bbf902;
+}
+
+/* FireFox Track & Thumb */
+input[type="range"].spotify-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: #4d4d4d;
+}
+
+input[type="range"].spotify-slider::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: none;
+  opacity: 0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.group:hover input[type="range"].spotify-slider::-moz-range-thumb,
+input[type="range"].spotify-slider:hover::-moz-range-thumb {
+  opacity: 1;
+}
