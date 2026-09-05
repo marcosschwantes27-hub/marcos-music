@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Music } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 
@@ -24,8 +24,21 @@ function stringToGradient(str) {
 }
 
 export default function CoverArt({ song, size = 'md', className = '' }) {
-  const { getCoverUrl } = usePlayer();
+  const { getCoverUrl, updateSongCover } = usePlayer();
   const coverUrl = getCoverUrl(song);
+  const [imgError, setImgError] = useState(false);
+
+  // Reset error state if song or coverUrl changes
+  useEffect(() => {
+    setImgError(false);
+  }, [song?.id, coverUrl]);
+
+  // Lazy trigger cover recovery if song has no cover at all
+  useEffect(() => {
+    if (song && !song.coverBlob && !song.coverUrl && song.id && updateSongCover) {
+      updateSongCover(song.id).catch(() => {});
+    }
+  }, [song?.id]);
 
   const sizeClasses = {
     sm: 'w-10 h-10 min-w-[40px] min-h-[40px] rounded-[4px]',
@@ -41,13 +54,14 @@ export default function CoverArt({ song, size = 'md', className = '' }) {
     xl: 80,
   };
 
-  if (coverUrl) {
+  if (coverUrl && !imgError) {
     return (
       <img
         src={coverUrl}
         alt={song?.title || 'Capa do álbum'}
         className={`${sizeClasses[size] || sizeClasses.md} object-cover flex-shrink-0 select-none ${className}`}
         loading="lazy"
+        onError={() => setImgError(true)}
       />
     );
   }

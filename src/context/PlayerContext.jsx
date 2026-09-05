@@ -3,6 +3,7 @@ import * as db from '../db/database';
 import { extractMetadata } from '../utils/metadata';
 import { apiFetch } from '../utils/api';
 import { fetchLyricsForSong } from '../utils/lyricsApi';
+import { resolveCoverArt, fetchCoverBlob } from '../utils/coverResolver';
 
 const PlayerContext = createContext();
 
@@ -61,14 +62,16 @@ export function PlayerProvider({ children }) {
   // Helper to get or create object URL for cover art
   const getCoverUrl = (song) => {
     if (!song) return null;
-    if (song.coverUrl) return song.coverUrl;
-    if (!song.coverBlob) return null;
-    if (coverUrlsMapRef.current.has(song.id)) {
-      return coverUrlsMapRef.current.get(song.id);
+    if (song.coverBlob) {
+      if (coverUrlsMapRef.current.has(song.id)) {
+        return coverUrlsMapRef.current.get(song.id);
+      }
+      const url = URL.createObjectURL(song.coverBlob);
+      coverUrlsMapRef.current.set(song.id, url);
+      return url;
     }
-    const url = URL.createObjectURL(song.coverBlob);
-    coverUrlsMapRef.current.set(song.id, url);
-    return url;
+    if (song.coverUrl) return song.coverUrl;
+    return null;
   };
 
   // Load songs, playlists, and download queue from IndexedDB on startup
@@ -691,17 +694,36 @@ export function PlayerProvider({ children }) {
 
     for (const file of fileArray) {
       const meta = await extractMetadata(file);
+      let coverBlob = meta.coverBlob;
+      let coverUrl = null;
+      let album = meta.album;
+
+      // If file has no embedded cover, look up official cover art
+      if (!coverBlob) {
+        try {
+          const resolved = await resolveCoverArt(meta.title, meta.artist);
+          if (resolved?.coverUrl) {
+            coverUrl = resolved.coverUrl;
+            if (!album || album === 'Desconhecido') album = resolved.album;
+            coverBlob = await fetchCoverBlob(resolved.coverUrl);
+          }
+        } catch (e) {
+          console.warn('Could not auto-fetch cover for uploaded file:', e);
+        }
+      }
+
       const song = {
         id: 'song_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9),
         title: meta.title,
         artist: meta.artist,
-        album: meta.album,
+        album: album || 'Desconhecido',
         duration: meta.duration,
         fileBlob: file,
         fileType: meta.fileType,
         fileName: meta.fileName,
         fileSize: meta.fileSize,
-        coverBlob: meta.coverBlob,
+        coverUrl: coverUrl,
+        coverBlob: coverBlob,
         isLiked: false,
         year: meta.year,
         genre: meta.genre,
@@ -777,14 +799,9 @@ export function PlayerProvider({ children }) {
         finalCoverUrl.includes('mosaic.scdn.co')
       ) {
         try {
-          const metaRes = await apiFetch(
-            `/api/music/track-meta?title=${encodeURIComponent(trackItem.title)}&artist=${encodeURIComponent(trackItem.artist)}`
-          );
-          if (metaRes.ok) {
-            const metaData = await metaRes.json();
-            if (metaData.coverUrl) finalCoverUrl = metaData.coverUrl;
-            if (metaData.album) finalAlbum = metaData.album;
-          }
+          const resolved = await resolveCoverArt(trackItem.title, trackItem.artist);
+          if (resolved?.coverUrl) finalCoverUrl = resolved.coverUrl;
+          if (resolved?.album) finalAlbum = resolved.album;
         } catch (e) {
           console.warn('Erro ao buscar metadados detalhados:', e);
         }
@@ -807,12 +824,7 @@ export function PlayerProvider({ children }) {
       let coverBlob = null;
       if (finalCoverUrl) {
         try {
-          const thumbRes = await apiFetch(
-            `/api/spotify/thumbnail?url=${encodeURIComponent(finalCoverUrl)}`
-          );
-          if (thumbRes.ok) {
-            coverBlob = await thumbRes.blob();
-          }
+          coverBlob = await fetchCoverBlob(finalCoverUrl);
         } catch (thumbErr) {
           console.warn('Erro ao obter capa do Spotify:', thumbErr);
         }
@@ -825,12 +837,13 @@ export function PlayerProvider({ children }) {
         id: 'sp_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
         title: trackItem.title,
         artist: trackItem.artist,
-        album: finalAlbum || 'Spotify Playlist',
+        album: finalAlbum || 'Single',
         duration: trackItem.duration || 0,
         fileBlob: audioBlob,
         fileType: audioBlob.type || 'audio/mp4',
         fileName: `${safeTitle} - ${safeArtist}.m4a`,
         fileSize: audioBlob.size,
+        coverUrl: finalCoverUrl || null,
         coverBlob: coverBlob,
         isLiked: false,
         dateAdded: new Date().toISOString(),
@@ -845,24 +858,16 @@ export function PlayerProvider({ children }) {
     }
   };
 
-  // Update a single song's cover art and album name from Deezer catalog
+  // Update a single song's cover art and album name using multi-source resolver
   const updateSongCover = async (songId) => {
     const song = songs.find((s) => s.id === songId);
     if (!song) return null;
 
     try {
-      const metaRes = await apiFetch(
-        `/api/music/track-meta?title=${encodeURIComponent(song.title)}&artist=${encodeURIComponent(song.artist)}`
-      );
-      if (!metaRes.ok) throw new Error('Não foi possível obter os metadados do álbum.');
-      const meta = await metaRes.json();
-      if (!meta.coverUrl) throw new Error('Capa original não encontrada.');
+      const resolved = await resolveCoverArt(song.title, song.artist);
+      if (!resolved?.coverUrl) throw new Error('Capa original não encontrada.');
 
-      const thumbRes = await apiFetch(
-        `/api/spotify/thumbnail?url=${encodeURIComponent(meta.coverUrl)}`
-      );
-      if (!thumbRes.ok) throw new Error('Falha ao baixar imagem da capa.');
-      const newCoverBlob = await thumbRes.blob();
+      const newCoverBlob = await fetchCoverBlob(resolved.coverUrl);
 
       // Revoke old cached URL so UI updates immediately
       if (coverUrlsMapRef.current.has(song.id)) {
@@ -872,8 +877,9 @@ export function PlayerProvider({ children }) {
 
       const updatedSong = {
         ...song,
-        album: meta.album || song.album,
-        coverBlob: newCoverBlob,
+        album: resolved.album || song.album,
+        coverUrl: resolved.coverUrl,
+        coverBlob: newCoverBlob || song.coverBlob,
       };
 
       await db.saveSong(updatedSong);
@@ -890,23 +896,60 @@ export function PlayerProvider({ children }) {
     }
   };
 
-  // Restore album covers for a list of songs or all songs
-  const fixAllSongCovers = async (targetSongIds = null) => {
-    const songsToFix = targetSongIds
-      ? songs.filter((s) => targetSongIds.includes(s.id))
-      : songs;
+  // Automatically heal and recover album covers for any songs that are missing covers
+  const autoHealMissingCovers = async (songList = null) => {
+    const list = songList || songs;
+    const missing = list.filter((s) => !s.coverBlob && !s.coverUrl);
+    if (missing.length === 0) return 0;
 
-    let updatedCount = 0;
-    for (const s of songsToFix) {
+    console.info(`[CoverHealer] Encontradas ${missing.length} músicas sem capa. Recuperando capas...`);
+
+    let healedCount = 0;
+    for (const song of missing) {
       try {
-        await updateSongCover(s.id);
-        updatedCount++;
+        const resolved = await resolveCoverArt(song.title, song.artist);
+        if (resolved?.coverUrl) {
+          const coverBlob = await fetchCoverBlob(resolved.coverUrl);
+          const updatedSong = {
+            ...song,
+            album: song.album && song.album !== 'Spotify Playlist' && song.album !== 'Desconhecido'
+              ? song.album
+              : (resolved.album || song.album),
+            coverUrl: resolved.coverUrl,
+            coverBlob: coverBlob,
+          };
+          await db.saveSong(updatedSong);
+          setSongs((prev) => prev.map((s) => (s.id === song.id ? updatedSong : s)));
+          if (currentSong?.id === song.id) {
+            setCurrentSong(updatedSong);
+          }
+          healedCount++;
+        }
       } catch (err) {
-        console.warn(`Não foi possível atualizar capa de "${s.title}":`, err);
+        console.warn(`[CoverHealer] Não foi possível obter capa para "${song.title}":`, err);
       }
     }
-    return updatedCount;
+    return healedCount;
   };
+
+  // Restore album covers for a list of songs or all songs
+  const fixAllSongCovers = async (targetSongIds = null) => {
+    return autoHealMissingCovers(targetSongIds ? songs.filter((s) => targetSongIds.includes(s.id)) : songs);
+  };
+
+  // Auto-heal missing covers once songs are loaded
+  const hasCheckedMissingCoversRef = useRef(false);
+  useEffect(() => {
+    if (!isLoading && songs.length > 0 && !hasCheckedMissingCoversRef.current) {
+      hasCheckedMissingCoversRef.current = true;
+      const hasMissing = songs.some((s) => !s.coverBlob && !s.coverUrl);
+      if (hasMissing) {
+        setTimeout(() => {
+          autoHealMissingCovers();
+        }, 1200);
+      }
+    }
+  }, [isLoading, songs]);
 
   // Liked songs list
   const likedSongs = useMemo(() => {
@@ -1172,6 +1215,7 @@ export function PlayerProvider({ children }) {
         downloadSpotifyTrack,
         updateSongCover,
         fixAllSongCovers,
+        autoHealMissingCovers,
         audioDevices,
         selectedDeviceId,
         currentDeviceName,
