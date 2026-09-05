@@ -11,10 +11,11 @@ export async function apiFetch(path, options = {}) {
 
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
 
-  // 1. Configured cloud backend URL (via env or localStorage)
+  // 1. Configured cloud backend URL (via localStorage, env or official cloud URL)
   const configuredApiUrl =
     (typeof localStorage !== 'undefined' && localStorage.getItem('custom_backend_url')) ||
-    import.meta.env.VITE_API_URL;
+    import.meta.env.VITE_API_URL ||
+    'https://marcos-music.onrender.com';
 
   if (configuredApiUrl) {
     const baseUrl = configuredApiUrl.replace(/\/+$/, '');

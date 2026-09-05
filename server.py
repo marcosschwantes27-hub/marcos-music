@@ -280,6 +280,12 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+
     def send_json(self, data, status=200):
         body = json.dumps(data).encode('utf-8')
         self.send_response(status)
@@ -294,15 +300,15 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
         path = parsed_path.path
         params = urllib.parse.parse_qs(parsed_path.query)
 
+        # Root & Health check (for Cloud providers like Render and Uptime monitors)
+        if path in ['/', '/health', '/api/ping', '/api/status']:
+            self.send_json({'status': 'online', 'service': 'Marcos Music Cloud API', 'version': '1.0.0'})
+            return
+
         # 0. Local Network IP Check
         if path == '/api/network-ip':
             ip = get_local_ip()
             self.send_json({'ip': ip, 'port': 5173, 'url': f'http://{ip}:5173'})
-            return
-
-        # 1. Status Check
-        if path == '/api/status':
-            self.send_json({'status': 'online', 'service': 'FurtadoMusic Core Service'})
             return
 
         # 2. Universal Music Search: Search Songs, Artists or Albums by keyword
