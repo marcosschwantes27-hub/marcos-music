@@ -361,55 +361,64 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
             try:
                 clean_title = re.sub(r'[/\\?%*:|"<>#]', '', title)
                 clean_artist = re.sub(r'[/\\?%*:|"<>#]', '', artist)
-                query = f"ytsearch1:{clean_title} {clean_artist} audio"
+                query = f"ytsearch5:{clean_title} {clean_artist} audio"
                 out_tmpl = os.path.join(TEMP_DIR, "%(id)s.%(ext)s")
+
+                downloaded_files = []
+                def on_progress_hook(d):
+                    if d.get('status') == 'finished':
+                        fn = d.get('filename')
+                        if fn:
+                            downloaded_files.append(fn)
 
                 ydl_opts = {
                     'format': 'bestaudio[ext=m4a]/bestaudio/best',
                     'outtmpl': out_tmpl,
                     'noplaylist': True,
                     'quiet': True,
+                    'ignoreerrors': True,
+                    'max_downloads': 1,
                     'overwrites': True,
+                    'progress_hooks': [on_progress_hook],
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(query, download=True)
-                    entries = info.get('entries', []) if 'entries' in info else [info]
-                    if not entries or not entries[0]:
-                        raise Exception("Nenhum áudio encontrado para esta faixa.")
-
-                    entry = entries[0]
-                    filepath = ydl.prepare_filename(entry)
-
-                    if not os.path.exists(filepath):
-                        base = os.path.splitext(filepath)[0]
-                        for ext in ['.m4a', '.webm', '.opus', '.mp3']:
-                            if os.path.exists(base + ext):
-                                filepath = base + ext
-                                break
-
-                    if not os.path.exists(filepath):
-                        raise Exception("Arquivo de áudio não foi salvo.")
-
-                    file_size = os.path.getsize(filepath)
-                    ext = os.path.splitext(filepath)[1].lower()
-                    content_type = 'audio/mp4' if ext == '.m4a' else 'audio/webm' if ext == '.webm' else 'audio/mpeg'
-
-                    self.send_response(200)
-                    self.send_header('Content-Type', content_type)
-                    self.send_header('Content-Length', str(file_size))
-                    self.send_header('Content-Disposition', f'attachment; filename="{clean_title}{ext}"')
-                    self.send_header('Connection', 'close')
-                    self.end_headers()
-
-                    with open(filepath, 'rb') as f:
-                        while chunk := f.read(65536):
-                            self.wfile.write(chunk)
-
                     try:
-                        os.remove(filepath)
-                    except Exception:
+                        ydl.extract_info(query, download=True)
+                    except yt_dlp.utils.MaxDownloadsReached:
                         pass
+
+                filepath = downloaded_files[0] if downloaded_files else None
+                if not filepath or not os.path.exists(filepath):
+                    # Check recent files in TEMP_DIR as fallback
+                    recent = [os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)]
+                    recent = [f for f in recent if os.path.isfile(f) and any(f.endswith(ext) for ext in ['.m4a', '.webm', '.opus', '.mp3'])]
+                    if recent:
+                        recent.sort(key=os.path.getmtime, reverse=True)
+                        filepath = recent[0]
+
+                if not filepath or not os.path.exists(filepath):
+                    raise Exception("Nenhum áudio público encontrado para esta faixa.")
+
+                file_size = os.path.getsize(filepath)
+                ext = os.path.splitext(filepath)[1].lower()
+                content_type = 'audio/mp4' if ext == '.m4a' else 'audio/webm' if ext == '.webm' else 'audio/mpeg'
+
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', str(file_size))
+                self.send_header('Content-Disposition', f'attachment; filename="{clean_title}{ext}"')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+
+                with open(filepath, 'rb') as f:
+                    while chunk := f.read(65536):
+                        self.wfile.write(chunk)
+
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
 
             except Exception as e:
                 print(f"Erro no download da faixa do Spotify ({title}): {e}")
