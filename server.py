@@ -419,7 +419,61 @@ def search_music_catalog(query, limit=30):
             'coverUrl': item.get('album', {}).get('cover_big') or item.get('album', {}).get('cover_medium'),
             'previewUrl': item.get('preview'),
         })
-    return results
+def fetch_lyrics_from_lrclib(track, artist, duration=0):
+    """
+    Fetches synchronized LRC lyrics or plain text lyrics from LRCLIB API.
+    Zero-cost, no API key required.
+    """
+    clean_track = re.sub(r'\(.*?\)|\[.*?\]', '', track).strip()
+    clean_artist = artist.split(',')[0].split('&')[0].split('feat.')[0].strip()
+
+    # 1. Try exact match
+    params = {'track_name': clean_track, 'artist_name': clean_artist}
+    if duration and duration > 0:
+        params['duration'] = str(int(duration))
+
+    try:
+        url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'MarcosMusicApp/1.0'})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            if data.get('syncedLyrics') or data.get('plainLyrics') or data.get('instrumental'):
+                return {
+                    'syncedLyrics': data.get('syncedLyrics'),
+                    'plainLyrics': data.get('plainLyrics'),
+                    'instrumental': data.get('instrumental', False),
+                    'trackName': data.get('trackName') or track,
+                    'artistName': data.get('artistName') or artist,
+                }
+    except Exception:
+        pass
+
+    # 2. Try search endpoint
+    try:
+        search_query = f"{clean_track} {clean_artist}".strip()
+        url = f"https://lrclib.net/api/search?{urllib.parse.urlencode({'q': search_query})}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'MarcosMusicApp/1.0'})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            items = json.loads(resp.read().decode('utf-8'))
+            if items and len(items) > 0:
+                # Prefer one with syncedLyrics
+                synced_item = next((it for it in items if it.get('syncedLyrics')), items[0])
+                return {
+                    'syncedLyrics': synced_item.get('syncedLyrics'),
+                    'plainLyrics': synced_item.get('plainLyrics'),
+                    'instrumental': synced_item.get('instrumental', False),
+                    'trackName': synced_item.get('trackName') or track,
+                    'artistName': synced_item.get('artistName') or artist,
+                }
+    except Exception:
+        pass
+
+    return {
+        'syncedLyrics': None,
+        'plainLyrics': None,
+        'instrumental': False,
+        'error': 'Letra não encontrada para esta música'
+    }
 
 
 class AudioRequestHandler(BaseHTTPRequestHandler):
@@ -486,6 +540,28 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
                 self.send_json({'isPlaylist': False, 'query': query, 'total': len(tracks), 'tracks': tracks})
             except Exception as e:
                 print(f"Erro na busca de músicas ({query}): {e}")
+                self.send_json({'error': str(e)}, status=500)
+            return
+
+        # 2.5 Real-Time Synchronized Lyrics API
+        if path == '/api/lyrics':
+            track = params.get('track', [''])[0].strip()
+            artist = params.get('artist', [''])[0].strip()
+            duration_raw = params.get('duration', ['0'])[0]
+            try:
+                duration = float(duration_raw) if duration_raw else 0
+            except Exception:
+                duration = 0
+
+            if not track:
+                self.send_json({'error': 'Param "track" is required'}, status=400)
+                return
+
+            try:
+                data = fetch_lyrics_from_lrclib(track, artist, duration)
+                self.send_json(data)
+            except Exception as e:
+                print(f"Erro ao buscar letras ({track} - {artist}): {e}")
                 self.send_json({'error': str(e)}, status=500)
             return
 

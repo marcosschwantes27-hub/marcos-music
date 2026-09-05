@@ -9,6 +9,7 @@ import QueueModal from './components/QueueModal';
 import VisualizerModal from './components/VisualizerModal';
 import DeviceModal from './components/DeviceModal';
 import InstallMobileModal from './components/InstallMobileModal';
+import LyricsModal from './components/LyricsModal';
 import BottomNav from './components/BottomNav';
 import { UploadCloud } from 'lucide-react';
 
@@ -22,7 +23,7 @@ function AppContent() {
 
   // Global window drag & drop detection
   const [isWindowDragging, setIsWindowDragging] = useState(false);
-  const { importAudioFiles } = usePlayer();
+  const { importAudioFiles, isLyricsOpen, setIsLyricsOpen } = usePlayer();
 
   useEffect(() => {
     let dragCounter = 0;
@@ -129,6 +130,10 @@ function AppContent() {
       <InstallMobileModal
         isOpen={isInstallMobileOpen}
         onClose={() => setIsInstallMobileOpen(false)}
+      />
+      <LyricsModal
+        isOpen={isLyricsOpen}
+        onClose={() => setIsLyricsOpen(false)}
       />
     </div>
   );

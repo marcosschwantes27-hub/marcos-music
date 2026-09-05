@@ -15,6 +15,7 @@ import {
   ListMusic,
   Speaker,
   Bluetooth,
+  Mic2,
 } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import { formatDuration } from '../utils/formatters';
@@ -46,6 +47,8 @@ export default function PlayerBar({
     cycleRepeatMode,
     isBluetoothActive,
     currentDeviceName,
+    isLyricsOpen,
+    toggleLyrics,
   } = usePlayer();
 
   const [isSeeking, setIsSeeking] = useState(false);
@@ -263,6 +266,22 @@ export default function PlayerBar({
 
       {/* Right Column: Volume & Extra Controls */}
       <div className="flex items-center justify-end gap-3.5 w-1/4 min-w-[180px]">
+        {/* Real-time Lyrics Button */}
+        <button
+          onClick={toggleLyrics}
+          className={`relative p-1 transition-colors ${
+            isLyricsOpen
+              ? 'text-spotify-green'
+              : 'text-spotify-textSubdued hover:text-spotify-textBase'
+          }`}
+          title={isLyricsOpen ? 'Ocultar letras' : 'Ver letras em tempo real (Karaokê)'}
+        >
+          <Mic2 size={18} />
+          {isLyricsOpen && (
+            <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-spotify-green rounded-full shadow-sm" />
+          )}
+        </button>
+
         {/* Visualizer Button */}
         <button
           onClick={onToggleVisualizer}

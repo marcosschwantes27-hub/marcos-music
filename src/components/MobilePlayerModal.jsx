@@ -12,9 +12,11 @@ import {
   Speaker,
   ListMusic,
   Activity,
+  Mic2,
 } from 'lucide-react';
 import { usePlayer } from '../context/PlayerContext';
 import { formatDuration } from '../utils/formatters';
+import { findActiveLyricIndex } from '../utils/lyrics';
 import CoverArt from './CoverArt';
 
 export default function MobilePlayerModal({
@@ -39,6 +41,8 @@ export default function MobilePlayerModal({
     cycleRepeatMode,
     isBluetoothActive,
     currentDeviceName,
+    lyricsData,
+    toggleLyrics,
   } = usePlayer();
 
   const [isSeeking, setIsSeeking] = useState(false);
@@ -48,6 +52,13 @@ export default function MobilePlayerModal({
 
   const displayTime = isSeeking ? seekValue : currentTime;
   const progressPercent = duration > 0 ? (displayTime / duration) * 100 : 0;
+
+  // Active lyric line calculation for preview card
+  const activeLyricIndex = findActiveLyricIndex(lyricsData?.parsedLines || [], currentTime);
+  const activeLyricText =
+    activeLyricIndex !== -1 && lyricsData?.parsedLines?.[activeLyricIndex]
+      ? lyricsData.parsedLines[activeLyricIndex].text
+      : null;
 
   const handleSeekChange = (e) => {
     setSeekValue(parseFloat(e.target.value));
@@ -84,13 +95,22 @@ export default function MobilePlayerModal({
           </span>
         </div>
 
-        <button
-          onClick={onOpenVisualizer}
-          className="p-2 -mr-2 text-spotify-textSubdued hover:text-white transition-colors"
-          title="Visualizador"
-        >
-          <Activity size={22} />
-        </button>
+        <div className="flex items-center gap-1 -mr-2">
+          <button
+            onClick={toggleLyrics}
+            className="p-2 text-spotify-textSubdued hover:text-white transition-colors"
+            title="Letras em tempo real"
+          >
+            <Mic2 size={21} />
+          </button>
+          <button
+            onClick={onOpenVisualizer}
+            className="p-2 text-spotify-textSubdued hover:text-white transition-colors"
+            title="Visualizador"
+          >
+            <Activity size={22} />
+          </button>
+        </div>
       </div>
 
       {/* Center: Large Album Artwork */}
@@ -194,6 +214,25 @@ export default function MobilePlayerModal({
               <span className="absolute bottom-0.5 left-1/2 -translate-x-1/2 w-1 h-1 bg-spotify-green rounded-full" />
             )}
           </button>
+        </div>
+
+        {/* Interactive Lyrics Card (Spotify style) */}
+        <div
+          onClick={toggleLyrics}
+          className="p-3 rounded-card bg-gradient-to-r from-spotify-surface via-spotify-middark to-spotify-surface border border-white/10 shadow-lg cursor-pointer hover:border-spotify-green/40 active:scale-[0.98] transition-all"
+        >
+          <div className="flex items-center justify-between text-xs mb-1">
+            <span className="font-bold uppercase tracking-wider flex items-center gap-1.5 text-spotify-green text-[10px]">
+              <Mic2 size={12} />
+              <span>Letras em tempo real</span>
+            </span>
+            <span className="text-[10px] text-spotify-textSubdued">
+              Expandir ↗
+            </span>
+          </div>
+          <p className="text-sm font-bold text-white truncate leading-relaxed">
+            {activeLyricText || (lyricsData?.plainLyrics ? '♪ Ver letra da música' : '♪ Toque para ver a letra')}
+          </p>
         </div>
 
         {/* Footer Quick Actions: Bluetooth / Car & Queue */}

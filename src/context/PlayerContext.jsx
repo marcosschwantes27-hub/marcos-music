@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, useMemo 
 import * as db from '../db/database';
 import { extractMetadata } from '../utils/metadata';
 import { apiFetch } from '../utils/api';
+import { fetchLyricsForSong } from '../utils/lyricsApi';
 
 const PlayerContext = createContext();
 
@@ -39,6 +40,18 @@ export function PlayerProvider({ children }) {
   const [selectedDeviceId, setSelectedDeviceId] = useState('default');
   const [currentDeviceName, setCurrentDeviceName] = useState('Alto-falantes deste Computador');
   const [isBluetoothActive, setIsBluetoothActive] = useState(false);
+
+  // Real-time Lyrics State
+  const [isLyricsOpen, setIsLyricsOpen] = useState(false);
+  const [lyricsData, setLyricsData] = useState({
+    syncedLyrics: null,
+    plainLyrics: null,
+    parsedLines: [],
+    isSynced: false,
+    instrumental: false,
+    isLoading: false,
+    error: null,
+  });
 
   // Audio element reference
   const audioRef = useRef(new Audio());
@@ -173,6 +186,66 @@ export function PlayerProvider({ children }) {
     audio.addEventListener('ended', handleEnded);
     return () => audio.removeEventListener('ended', handleEnded);
   }, [currentSong, queue, songs, repeatMode, isShuffle]);
+
+  // Load lyrics whenever currentSong changes
+  useEffect(() => {
+    if (!currentSong) {
+      setLyricsData({
+        syncedLyrics: null,
+        plainLyrics: null,
+        parsedLines: [],
+        isSynced: false,
+        instrumental: false,
+        isLoading: false,
+        error: null,
+      });
+      return;
+    }
+
+    let isCancelled = false;
+    async function loadLyrics() {
+      setLyricsData((prev) => ({ ...prev, isLoading: true, error: null }));
+      try {
+        const data = await fetchLyricsForSong(currentSong);
+        if (!isCancelled) {
+          setLyricsData({ ...data, isLoading: false });
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          setLyricsData({
+            syncedLyrics: null,
+            plainLyrics: null,
+            parsedLines: [],
+            isSynced: false,
+            instrumental: false,
+            isLoading: false,
+            error: 'Erro ao carregar letra',
+          });
+        }
+      }
+    }
+
+    loadLyrics();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentSong?.id, currentSong?.title, currentSong?.artist]);
+
+  const reloadLyrics = async () => {
+    if (!currentSong) return;
+    setLyricsData((prev) => ({ ...prev, isLoading: true, error: null }));
+    try {
+      const data = await fetchLyricsForSong(currentSong);
+      setLyricsData({ ...data, isLoading: false });
+    } catch (e) {
+      setLyricsData((prev) => ({ ...prev, isLoading: false, error: 'Erro ao recarregar letra' }));
+    }
+  };
+
+  const toggleLyrics = () => {
+    setIsLyricsOpen((prev) => !prev);
+  };
 
   // Fetch audio output devices
   const fetchAudioDevices = async () => {
@@ -1058,6 +1131,11 @@ export function PlayerProvider({ children }) {
         isPlaying,
         currentTime,
         duration,
+        isLyricsOpen,
+        setIsLyricsOpen,
+        toggleLyrics,
+        lyricsData,
+        reloadLyrics,
         volume,
         isMuted,
         isShuffle,
