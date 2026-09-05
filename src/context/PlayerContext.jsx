@@ -21,9 +21,14 @@ export function PlayerProvider({ children }) {
   const [repeatMode, setRepeatMode] = useState('off'); // 'off' | 'all' | 'one'
 
   // Navigation & View state
-  const [currentView, setCurrentView] = useState('home'); // 'home' | 'search' | 'library' | 'liked' | 'playlist'
+  const [currentView, setCurrentView] = useState('home'); // 'home' | 'search' | 'library' | 'liked' | 'playlist' | 'downloads'
   const [selectedPlaylistId, setSelectedPlaylistId] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Background Download Queue State
+  const [downloadQueue, setDownloadQueue] = useState([]);
+  const [isQueuePaused, setIsQueuePaused] = useState(false);
+  const isProcessingQueueRef = useRef(false);
 
   // Queue and history
   const [queue, setQueue] = useState([]);
@@ -53,7 +58,7 @@ export function PlayerProvider({ children }) {
     return url;
   };
 
-  // Load songs and playlists from IndexedDB on startup
+  // Load songs, playlists, and download queue from IndexedDB on startup
   useEffect(() => {
     async function loadData() {
       try {
@@ -63,12 +68,22 @@ export function PlayerProvider({ children }) {
           await db.clearAllSongs();
         }
 
-        const [loadedSongs, loadedPlaylists] = await Promise.all([
+        const [loadedSongs, loadedPlaylists, loadedQueue] = await Promise.all([
           db.getAllSongs(),
           db.getAllPlaylists(),
+          db.getAllQueueItems(),
         ]);
         setSongs(loadedSongs);
         setPlaylists(loadedPlaylists);
+
+        // Sanitize queue: reset any interrupted 'downloading' status to 'pending' so it automatically resumes
+        const sanitizedQueue = (loadedQueue || []).map((item) => {
+          if (item.status === 'downloading') {
+            return { ...item, status: 'pending' };
+          }
+          return item;
+        });
+        setDownloadQueue(sanitizedQueue);
       } catch (err) {
         console.error('Erro ao carregar dados do IndexedDB:', err);
       } finally {
@@ -810,6 +825,203 @@ export function PlayerProvider({ children }) {
     return songs.filter((s) => s.isLiked);
   }, [songs]);
 
+  // ================= Background Download Queue Manager =================
+
+  const processDownloadQueue = async () => {
+    if (isProcessingQueueRef.current || isQueuePaused) return;
+
+    // Find next pending item from IndexedDB
+    const currentQueue = await db.getAllQueueItems();
+    const nextItem = currentQueue.find((item) => item.status === 'pending');
+    if (!nextItem) return;
+
+    isProcessingQueueRef.current = true;
+
+    const updatingItem = {
+      ...nextItem,
+      status: 'downloading',
+      updatedAt: new Date().toISOString(),
+    };
+    await db.saveQueueItem(updatingItem);
+    setDownloadQueue((prev) =>
+      prev.map((it) => (it.id === nextItem.id ? updatingItem : it))
+    );
+
+    try {
+      const savedSong = await downloadSpotifyTrack(nextItem.track);
+      if (nextItem.playlistId && savedSong) {
+        await addTrackToPlaylist(nextItem.playlistId, savedSong.id);
+      }
+
+      const completedItem = {
+        ...nextItem,
+        status: 'completed',
+        savedSongId: savedSong?.id,
+        completedAt: new Date().toISOString(),
+      };
+      await db.saveQueueItem(completedItem);
+      setDownloadQueue((prev) =>
+        prev.map((it) => (it.id === nextItem.id ? completedItem : it))
+      );
+    } catch (err) {
+      console.warn(`Erro no download em segundo plano de "${nextItem.title}":`, err);
+      const failedItem = {
+        ...nextItem,
+        status: 'failed',
+        error: err.message || 'Falha ao baixar áudio',
+        failedAt: new Date().toISOString(),
+      };
+      await db.saveQueueItem(failedItem);
+      setDownloadQueue((prev) =>
+        prev.map((it) => (it.id === nextItem.id ? failedItem : it))
+      );
+    } finally {
+      isProcessingQueueRef.current = false;
+      // Trigger next item in queue
+      setTimeout(() => {
+        processDownloadQueue();
+      }, 300);
+    }
+  };
+
+  // Run queue processor whenever downloadQueue changes or is unpaused
+  useEffect(() => {
+    if (!isQueuePaused && downloadQueue.some((it) => it.status === 'pending')) {
+      processDownloadQueue();
+    }
+  }, [downloadQueue, isQueuePaused]);
+
+  // Keep processing when tab wakes up, is unminimized, or returns to foreground
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !isQueuePaused) {
+        processDownloadQueue();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isQueuePaused]);
+
+  // Queue Operations
+  const enqueueDownload = async (track, playlistId = null) => {
+    const existing = songs.find(
+      (s) =>
+        s.title.toLowerCase() === track.title.toLowerCase() &&
+        s.artist.toLowerCase().includes(track.artist.toLowerCase())
+    );
+    if (existing) {
+      if (playlistId) {
+        await addTrackToPlaylist(playlistId, existing.id);
+      }
+      return existing;
+    }
+
+    const item = {
+      id: 'dl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      track: {
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album || 'Single',
+        duration: track.duration || 0,
+        coverUrl: track.coverUrl,
+        previewUrl: track.previewUrl,
+      },
+      title: track.title,
+      artist: track.artist,
+      album: track.album || 'Single',
+      duration: track.duration || 0,
+      coverUrl: track.coverUrl,
+      status: 'pending',
+      error: null,
+      playlistId: playlistId,
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.saveQueueItem(item);
+    setDownloadQueue((prev) => [...prev, item]);
+    return item;
+  };
+
+  const enqueueBatchDownload = async (trackList, playlistId = null) => {
+    const newItems = [];
+    for (const track of trackList) {
+      const existing = songs.find(
+        (s) =>
+          s.title.toLowerCase() === track.title.toLowerCase() &&
+          s.artist.toLowerCase().includes(track.artist.toLowerCase())
+      );
+      if (existing) {
+        if (playlistId) {
+          await addTrackToPlaylist(playlistId, existing.id);
+        }
+        continue;
+      }
+
+      const item = {
+        id: 'dl_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+        track: {
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || 'Single',
+          duration: track.duration || 0,
+          coverUrl: track.coverUrl,
+          previewUrl: track.previewUrl,
+        },
+        title: track.title,
+        artist: track.artist,
+        album: track.album || 'Single',
+        duration: track.duration || 0,
+        coverUrl: track.coverUrl,
+        status: 'pending',
+        error: null,
+        playlistId: playlistId,
+        createdAt: new Date().toISOString(),
+      };
+      await db.saveQueueItem(item);
+      newItems.push(item);
+    }
+    if (newItems.length > 0) {
+      setDownloadQueue((prev) => [...prev, ...newItems]);
+    }
+    return newItems;
+  };
+
+  const retryDownload = async (queueId) => {
+    const item = downloadQueue.find((it) => it.id === queueId);
+    if (!item) return;
+    const updated = {
+      ...item,
+      status: 'pending',
+      error: null,
+      createdAt: new Date().toISOString(),
+    };
+    await db.saveQueueItem(updated);
+    setDownloadQueue((prev) =>
+      prev.map((it) => (it.id === queueId ? updated : it))
+    );
+  };
+
+  const cancelDownload = async (queueId) => {
+    await db.deleteQueueItem(queueId);
+    setDownloadQueue((prev) => prev.filter((it) => it.id !== queueId));
+  };
+
+  const clearCompletedDownloads = async () => {
+    await db.clearCompletedQueueItems();
+    setDownloadQueue((prev) => prev.filter((it) => it.status !== 'completed'));
+  };
+
+  const clearAllDownloads = async () => {
+    await db.clearAllQueueItems();
+    setDownloadQueue([]);
+  };
+
+  const activeDownloadsCount = useMemo(() => {
+    return downloadQueue.filter((it) => it.status === 'pending' || it.status === 'downloading').length;
+  }, [downloadQueue]);
+
   return (
     <PlayerContext.Provider
       value={{
@@ -817,6 +1029,16 @@ export function PlayerProvider({ children }) {
         playlists,
         likedSongs,
         isLoading,
+        downloadQueue,
+        activeDownloadsCount,
+        isQueuePaused,
+        setIsQueuePaused,
+        enqueueDownload,
+        enqueueBatchDownload,
+        retryDownload,
+        cancelDownload,
+        clearCompletedDownloads,
+        clearAllDownloads,
         currentSong,
         isPlaying,
         currentTime,

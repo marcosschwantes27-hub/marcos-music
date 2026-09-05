@@ -34,6 +34,9 @@ export default function SpotifyImporter() {
     currentSong,
     isPlaying,
     togglePlayPause,
+    enqueueDownload,
+    enqueueBatchDownload,
+    downloadQueue,
   } = usePlayer();
 
   // Tab mode: 'search' (Pesquisar Músicas) | 'playlist' (Importar Playlist do Spotify)
@@ -56,7 +59,7 @@ export default function SpotifyImporter() {
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const cancelBatchRef = useRef(false);
 
-  // Check which tracks are already in library
+  // Check which tracks are already in library or queue
   const checkSavedTracks = (trackList) => {
     const statusMap = {};
     trackList.forEach((t) => {
@@ -67,6 +70,15 @@ export default function SpotifyImporter() {
       );
       if (already) {
         statusMap[t.id] = 'saved';
+        return;
+      }
+      const queued = downloadQueue.find(
+        (q) =>
+          q.title.toLowerCase() === t.title.toLowerCase() &&
+          q.artist.toLowerCase().includes(t.artist.toLowerCase())
+      );
+      if (queued) {
+        statusMap[t.id] = queued.status === 'completed' ? 'saved' : queued.status;
       }
     });
     setTrackStatus((prev) => ({ ...prev, ...statusMap }));
@@ -139,37 +151,19 @@ export default function SpotifyImporter() {
   const handleDownloadTrack = async (track, localPlaylistId = null) => {
     setTrackStatus((prev) => ({ ...prev, [track.id]: 'downloading' }));
     try {
-      // Check if song already exists in library
-      const existing = songs.find(
-        (s) =>
-          s.title.toLowerCase() === track.title.toLowerCase() &&
-          s.artist.toLowerCase().includes(track.artist.toLowerCase())
-      );
-
-      let savedSong = existing;
-      if (!savedSong) {
-        savedSong = await downloadSpotifyTrack(track);
-      }
-
-      setTrackStatus((prev) => ({ ...prev, [track.id]: 'saved' }));
-
+      // Queue track for persistent background download
       const targetPlaylistId = localPlaylistId || importedPlaylistId;
-      if (targetPlaylistId && savedSong) {
-        await addTrackToPlaylist(targetPlaylistId, savedSong.id);
-      }
-      return savedSong;
+      await enqueueDownload(track, targetPlaylistId);
+      setTrackStatus((prev) => ({ ...prev, [track.id]: 'downloading' }));
     } catch (err) {
       console.error(err);
       setTrackStatus((prev) => ({ ...prev, [track.id]: 'error' }));
     }
   };
 
-  // Batch download and import Spotify playlist into Marcos Music
+  // Batch download and import Spotify playlist via persistent background queue
   const handleDownloadAll = async () => {
     if (!playlistData || !playlistData.tracks || playlistData.tracks.length === 0) return;
-
-    cancelBatchRef.current = false;
-    setIsBatchDownloading(true);
 
     // 1. Create the playlist in Marcos Music
     let localPl = null;
@@ -186,65 +180,17 @@ export default function SpotifyImporter() {
     }
 
     const tracksToDownload = playlistData.tracks;
-    setBatchProgress({ current: 0, total: tracksToDownload.length });
+    // 2. Send all tracks to the persistent background download queue!
+    await enqueueBatchDownload(tracksToDownload, localPl?.id);
 
-    const collectedSongIds = [];
+    const statusMap = {};
+    tracksToDownload.forEach((t) => {
+      statusMap[t.id] = 'downloading';
+    });
+    setTrackStatus((prev) => ({ ...prev, ...statusMap }));
 
-    for (let i = 0; i < tracksToDownload.length; i++) {
-      if (cancelBatchRef.current) break;
-
-      const track = tracksToDownload[i];
-      setBatchProgress({ current: i + 1, total: tracksToDownload.length });
-
-      // Check if track is already in local library
-      const existingSong = songs.find(
-        (s) =>
-          s.title.toLowerCase() === track.title.toLowerCase() &&
-          s.artist.toLowerCase().includes(track.artist.toLowerCase())
-      );
-
-      if (existingSong) {
-        collectedSongIds.push(existingSong.id);
-        if (localPl) {
-          await addTrackToPlaylist(localPl.id, existingSong.id);
-        }
-        setTrackStatus((prev) => ({ ...prev, [track.id]: 'saved' }));
-        continue;
-      }
-
-      let saved = null;
-      try {
-        setTrackStatus((prev) => ({ ...prev, [track.id]: 'downloading' }));
-        saved = await downloadSpotifyTrack(track);
-      } catch (firstErr) {
-        console.warn(`Tentando novamente baixar ${track.title}...`, firstErr);
-        // Pequena pausa e tenta mais uma vez automaticamente
-        await new Promise((r) => setTimeout(r, 1200));
-        try {
-          saved = await downloadSpotifyTrack(track);
-        } catch (retryErr) {
-          console.warn(`Erro ao baixar faixa ${track.title}:`, retryErr);
-        }
-      }
-
-      if (saved) {
-        collectedSongIds.push(saved.id);
-        if (localPl) {
-          await addTrackToPlaylist(localPl.id, saved.id);
-        }
-        setTrackStatus((prev) => ({ ...prev, [track.id]: 'saved' }));
-      } else {
-        setTrackStatus((prev) => ({ ...prev, [track.id]: 'error' }));
-      }
-    }
-
-    setIsBatchDownloading(false);
-
-    // Automatically navigate to the imported playlist in Marcos Music!
-    if (localPl) {
-      setSelectedPlaylistId(localPl.id);
-      setCurrentView('playlist');
-    }
+    // 3. Immediately switch to Downloads tab so user can see live progress in background!
+    setCurrentView('downloads');
   };
 
   const handleCancelBatch = () => {

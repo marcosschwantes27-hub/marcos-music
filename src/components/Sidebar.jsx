@@ -1,4 +1,4 @@
-import { Home, Search, FolderUp, Music2, Disc3, Smartphone } from 'lucide-react';
+import { Home, Search, FolderUp, Music2, Disc3, Smartphone, ArrowDownToLine } from 'lucide-react';
 import SpotifyIcon from './SpotifyIcon';
 import { usePlayer } from '../context/PlayerContext';
 
@@ -11,11 +11,13 @@ export default function Sidebar({ onOpenUpload, onOpenCreatePlaylist, onOpenInst
     setSelectedPlaylistId,
     likedSongs,
     songs,
+    activeDownloadsCount,
   } = usePlayer();
 
   const navItems = [
     { id: 'home', label: 'Início', icon: Home },
     { id: 'search', label: 'Buscar', icon: Search },
+    { id: 'downloads', label: 'Downloads', icon: ArrowDownToLine, badge: activeDownloadsCount },
     { id: 'spotify', label: 'Importar Músicas', icon: SpotifyIcon, isSpotify: true },
   ];
 
@@ -61,11 +63,18 @@ export default function Sidebar({ onOpenUpload, onOpenCreatePlaylist, onOpenInst
                     className={
                       item.id === 'spotify'
                         ? 'text-spotify-green'
+                        : item.id === 'downloads' && item.badge > 0
+                        ? 'text-spotify-green'
                         : ''
                     }
                   />
                   <span>{item.label}</span>
                 </div>
+                {item.id === 'downloads' && item.badge > 0 && (
+                  <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-spotify-green text-black animate-pulse shadow-sm">
+                    {item.badge}
+                  </span>
+                )}
                 {item.id === 'spotify' && (
                   <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-spotify-green/20 text-spotify-green border border-spotify-green/40 tracking-wider shadow-sm">
                     Músicas

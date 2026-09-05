@@ -18,6 +18,7 @@ import { getGreeting, formatDuration } from '../utils/formatters';
 import TrackTable from './TrackTable';
 import CoverArt from './CoverArt';
 import SpotifyImporter from './SpotifyImporter';
+import DownloadsView from './DownloadsView';
 
 export default function MainView({ onOpenUpload, onOpenInstallMobile, onOpenCreatePlaylist }) {
   const {
@@ -116,6 +117,14 @@ export default function MainView({ onOpenUpload, onOpenInstallMobile, onOpenCrea
     return (
       <main className="flex-1 bg-spotify-base md:rounded-card overflow-hidden m-0 md:m-2 md:ml-0 flex flex-col relative select-none">
         <SpotifyImporter />
+      </main>
+    );
+  }
+
+  if (currentView === 'downloads') {
+    return (
+      <main className="flex-1 bg-gradient-to-b from-neutral-900 to-spotify-base md:rounded-card overflow-y-auto m-0 md:m-2 md:ml-0 flex flex-col relative select-none">
+        <DownloadsView />
       </main>
     );
   }

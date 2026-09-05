@@ -46,3 +46,38 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// ================= Background Fetch Support =================
+// Allows downloads to run at the OS level even if the browser/tab is minimized or closed
+
+self.addEventListener('backgroundfetchsuccess', (event) => {
+  const bgFetch = event.registration;
+  event.waitUntil(
+    (async () => {
+      try {
+        const records = await bgFetch.matchAll();
+        for (const record of records) {
+          const response = await record.responseReady;
+          // Notify any open clients about the completed background download
+          const clients = await self.clients.matchAll({ type: 'window' });
+          clients.forEach((client) => {
+            client.postMessage({
+              type: 'BG_FETCH_SUCCESS',
+              id: bgFetch.id,
+            });
+          });
+        }
+      } catch (err) {
+        console.warn('Error processing background fetch success:', err);
+      }
+    })()
+  );
+});
+
+self.addEventListener('backgroundfetchfail', (event) => {
+  console.warn('Background fetch failed:', event.registration.id);
+});
+
+self.addEventListener('backgroundfetchabort', (event) => {
+  console.info('Background fetch aborted:', event.registration.id);
+});

@@ -2,7 +2,7 @@ import { openDB } from 'idb';
 
 const DB_NAME = 'MarcosMusicDB';
 const OLD_DB_NAME = 'FurtadoMusicDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let migrationDone = false;
 
@@ -24,6 +24,12 @@ export async function getDB() {
 
       if (!db.objectStoreNames.contains('settings')) {
         db.createObjectStore('settings', { keyPath: 'key' });
+      }
+
+      if (!db.objectStoreNames.contains('downloadQueue')) {
+        const queueStore = db.createObjectStore('downloadQueue', { keyPath: 'id' });
+        queueStore.createIndex('status', 'status');
+        queueStore.createIndex('createdAt', 'createdAt');
       }
     },
   });
@@ -205,4 +211,40 @@ export async function removeSongFromPlaylist(playlistId, songId) {
     await db.put('playlists', playlist);
   }
   return playlist;
+}
+
+// ================= Download Queue Operations =================
+
+export async function getAllQueueItems() {
+  const db = await getDB();
+  const items = await db.getAll('downloadQueue');
+  return items.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+export async function saveQueueItem(item) {
+  const db = await getDB();
+  await db.put('downloadQueue', item);
+  return item;
+}
+
+export async function deleteQueueItem(itemId) {
+  const db = await getDB();
+  await db.delete('downloadQueue', itemId);
+}
+
+export async function clearCompletedQueueItems() {
+  const db = await getDB();
+  const items = await db.getAll('downloadQueue');
+  const tx = db.transaction('downloadQueue', 'readwrite');
+  for (const it of items) {
+    if (it.status === 'completed') {
+      await tx.store.delete(it.id);
+    }
+  }
+  await tx.done;
+}
+
+export async function clearAllQueueItems() {
+  const db = await getDB();
+  await db.clear('downloadQueue');
 }
