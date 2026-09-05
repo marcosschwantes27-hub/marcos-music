@@ -47,7 +47,7 @@ def ensure_deno_installed():
 
 ensure_deno_installed()
 
-MIN_AUDIO_SIZE = 400_000  # 400KB minimum to consider a valid full track
+MIN_AUDIO_SIZE = 300_000  # 300KB minimum to consider a valid audio track
 
 def _download_single_video(url):
     """Download a single video/track directly. Returns filepath or None."""
@@ -82,24 +82,39 @@ def _download_single_video(url):
             ydl.download([url])
     except Exception as e:
         print(f"Error downloading candidate {url}: {e}")
-        return None
 
+    # 1. Check direct filename from hook
     if downloaded_files:
         fp = downloaded_files[0]
         if os.path.exists(fp) and os.path.getsize(fp) >= MIN_AUDIO_SIZE:
             return fp
-        if os.path.exists(fp):
-            try:
-                os.remove(fp)
-            except Exception:
-                pass
+        base = os.path.splitext(fp)[0]
+        for ext in ['.m4a', '.webm', '.opus', '.mp3']:
+            if os.path.exists(base + ext) and os.path.getsize(base + ext) >= MIN_AUDIO_SIZE:
+                return base + ext
+
+    # 2. Check recent files in TEMP_DIR as fallback (for renamed/transcoded files)
+    try:
+        recent = [os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)]
+        recent = [
+            f for f in recent
+            if os.path.isfile(f) and any(f.endswith(ext) for ext in ['.m4a', '.webm', '.opus', '.mp3'])
+        ]
+        if recent:
+            recent.sort(key=os.path.getmtime, reverse=True)
+            newest = recent[0]
+            if os.path.getsize(newest) >= MIN_AUDIO_SIZE:
+                return newest
+    except Exception:
+        pass
+
     return None
 
 def try_download_audio(search_term):
     """
     Ultra-resilient multi-source audio downloader.
-    Uses extract_flat to fetch candidate URLs instantly without throwing errors on unavailable videos,
-    then attempts downloading candidates in order until the first success.
+    Always includes candidates from BOTH YouTube and SoundCloud,
+    so if YouTube blocks cloud/datacenter IPs, SoundCloud succeeds immediately.
     """
     flat_opts = {
         'quiet': True,
@@ -109,48 +124,43 @@ def try_download_audio(search_term):
         'ignoreerrors': True,
     }
 
-    search_queries = [
-        f"ytsearch5:{search_term} audio",
-        f"ytsearch5:{search_term} official audio",
-        f"scsearch3:{search_term}",
-    ]
-
-    candidate_urls = []
-    seen_urls = set()
-
-    for q in search_queries:
+    def fetch_urls(query, limit=3):
+        urls = []
         try:
             with yt_dlp.YoutubeDL(flat_opts) as ydl:
-                res = ydl.extract_info(q, download=False)
+                res = ydl.extract_info(query, download=False)
                 entries = res.get('entries', []) if res else []
-                for entry in entries:
+                for entry in entries[:limit]:
                     if not entry:
                         continue
-                    vid_id = entry.get('id')
-                    raw_url = entry.get('url')
-                    if vid_id and not raw_url:
-                        url = f"https://www.youtube.com/watch?v={vid_id}"
-                    elif raw_url:
-                        url = raw_url if raw_url.startswith('http') else f"https://www.youtube.com/watch?v={raw_url}"
-                    elif vid_id:
-                        url = f"https://www.youtube.com/watch?v={vid_id}"
-                    else:
-                        continue
-
-                    if url not in seen_urls:
-                        seen_urls.add(url)
-                        candidate_urls.append(url)
-                        if len(candidate_urls) >= 6:
-                            break
+                    u = entry.get('url') or entry.get('id')
+                    if u:
+                        if not str(u).startswith('http'):
+                            u = f"https://www.youtube.com/watch?v={u}"
+                        urls.append(u)
         except Exception as e:
-            print(f"Search query error on {q}: {e}")
+            print(f"Search query error on {query}: {e}")
+        return urls
 
-        if len(candidate_urls) >= 4:
-            break
+    # Fetch 3 YouTube candidates
+    yt_candidates = fetch_urls(f"ytsearch3:{search_term} audio", limit=3)
+    # Always fetch 2 SoundCloud candidates for cloud servers
+    sc_candidates = fetch_urls(f"scsearch2:{search_term}", limit=2)
 
-    print(f"Found {len(candidate_urls)} candidate sources for '{search_term}'")
+    # Combine: try top YouTube candidate, then top SoundCloud candidate, then remaining
+    candidates = []
+    if yt_candidates:
+        candidates.append(yt_candidates[0])
+    if sc_candidates:
+        candidates.append(sc_candidates[0])
+    if len(yt_candidates) > 1:
+        candidates.extend(yt_candidates[1:])
+    if len(sc_candidates) > 1:
+        candidates.extend(sc_candidates[1:])
 
-    for url in candidate_urls:
+    print(f"Found {len(candidates)} total interleaved candidates for '{search_term}'")
+
+    for url in candidates:
         try:
             fp = _download_single_video(url)
             if fp:
