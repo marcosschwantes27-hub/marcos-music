@@ -419,6 +419,9 @@ def search_music_catalog(query, limit=30):
             'coverUrl': item.get('album', {}).get('cover_big') or item.get('album', {}).get('cover_medium'),
             'previewUrl': item.get('preview'),
         })
+    return results
+
+
 def fetch_lyrics_from_lrclib(track, artist, duration=0):
     """
     Fetches synchronized LRC lyrics or plain text lyrics from LRCLIB API.
