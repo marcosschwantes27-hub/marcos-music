@@ -30,6 +30,10 @@ export default function SpotifyImporter() {
     setSelectedPlaylistId,
     setCurrentView,
     songs,
+    playSong,
+    currentSong,
+    isPlaying,
+    togglePlayPause,
   } = usePlayer();
 
   // Tab mode: 'search' (Pesquisar Músicas) | 'playlist' (Importar Playlist do Spotify)
@@ -51,20 +55,6 @@ export default function SpotifyImporter() {
   const [isBatchDownloading, setIsBatchDownloading] = useState(false);
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 });
   const cancelBatchRef = useRef(false);
-
-  // Audio preview player (30s clip)
-  const [playingPreviewId, setPlayingPreviewId] = useState(null);
-  const previewAudioRef = useRef(new Audio());
-
-  useEffect(() => {
-    const audio = previewAudioRef.current;
-    const handleEnded = () => setPlayingPreviewId(null);
-    audio.addEventListener('ended', handleEnded);
-    return () => {
-      audio.pause();
-      audio.removeEventListener('ended', handleEnded);
-    };
-  }, []);
 
   // Check which tracks are already in library
   const checkSavedTracks = (trackList) => {
@@ -131,19 +121,15 @@ export default function SpotifyImporter() {
     }
   };
 
-  // Toggle 30s audio preview
+  // Toggle 30s audio preview via global player
   const togglePreview = (track) => {
-    const audio = previewAudioRef.current;
-    if (playingPreviewId === track.id) {
-      audio.pause();
-      setPlayingPreviewId(null);
+    if (currentSong?.id === track.id) {
+      togglePlayPause();
       return;
     }
 
-    if (track.previewUrl) {
-      audio.src = track.previewUrl;
-      audio.play().catch(console.error);
-      setPlayingPreviewId(track.id);
+    if (track.previewUrl || track.url) {
+      playSong(track, filteredList);
     } else {
       alert('Prévia de áudio não disponível para esta faixa. Você pode baixá-la diretamente!');
     }
@@ -477,7 +463,7 @@ export default function SpotifyImporter() {
             <div className="divide-y divide-spotify-border/20">
               {filteredList.map((track, idx) => {
                 const status = trackStatus[track.id];
-                const isPreviewing = playingPreviewId === track.id;
+                const isPreviewing = currentSong?.id === track.id && isPlaying;
 
                 return (
                   <div

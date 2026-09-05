@@ -42,7 +42,9 @@ export function PlayerProvider({ children }) {
 
   // Helper to get or create object URL for cover art
   const getCoverUrl = (song) => {
-    if (!song || !song.coverBlob) return null;
+    if (!song) return null;
+    if (song.coverUrl) return song.coverUrl;
+    if (!song.coverBlob) return null;
     if (coverUrlsMapRef.current.has(song.id)) {
       return coverUrlsMapRef.current.get(song.id);
     }
@@ -123,14 +125,24 @@ export function PlayerProvider({ children }) {
       if (repeatMode === 'one') {
         audio.currentTime = 0;
         audio.play().catch(console.error);
-      } else {
+      } else if (repeatMode === 'all') {
         handleNextTrack();
+      } else {
+        const activeList = queue.length > 0 ? queue : songs;
+        const currentIndex = activeList.findIndex((s) => s.id === currentSong?.id);
+        if (currentIndex !== -1 && currentIndex < activeList.length - 1) {
+          handleNextTrack();
+        } else {
+          audio.pause();
+          audio.currentTime = 0;
+          setIsPlaying(false);
+        }
       }
     };
 
     audio.addEventListener('ended', handleEnded);
     return () => audio.removeEventListener('ended', handleEnded);
-  });
+  }, [currentSong, queue, songs, repeatMode, isShuffle]);
 
   // Fetch audio output devices
   const fetchAudioDevices = async () => {
@@ -298,7 +310,7 @@ export function PlayerProvider({ children }) {
       }
     }
 
-    if (trackList && Array.isArray(trackList)) {
+    if (trackList && Array.isArray(trackList) && trackList.length > 0) {
       setQueue(trackList);
       if (isShuffle) {
         unplayedShuffleRef.current = trackList.filter((s) => s.id !== song.id).map((s) => s.id);
@@ -315,10 +327,23 @@ export function PlayerProvider({ children }) {
       currentObjectUrlRef.current = null;
     }
 
-    const audioUrl = URL.createObjectURL(song.fileBlob);
-    currentObjectUrlRef.current = audioUrl;
+    let audioSrc = '';
+    if (song.fileBlob) {
+      const audioUrl = URL.createObjectURL(song.fileBlob);
+      currentObjectUrlRef.current = audioUrl;
+      audioSrc = audioUrl;
+    } else if (song.previewUrl) {
+      audioSrc = song.previewUrl;
+    } else if (song.url) {
+      audioSrc = song.url;
+    }
 
-    audio.src = audioUrl;
+    if (!audioSrc) {
+      console.warn('Faixa sem áudio disponível:', song);
+      return;
+    }
+
+    audio.src = audioSrc;
     audio.currentTime = 0;
     setCurrentSong(song);
     setDuration(song.duration || 0);
@@ -334,20 +359,30 @@ export function PlayerProvider({ children }) {
       });
   };
 
-  // Toggle Play / Pause
+  // Toggle Play / Pause - checks real HTML5 audio state
   const togglePlayPause = () => {
     const audio = audioRef.current;
     if (!currentSong) {
-      if (songs.length > 0) {
-        playSong(songs[0]);
+      const activeList = queue.length > 0 ? queue : songs;
+      if (activeList.length > 0) {
+        playSong(activeList[0], activeList);
       }
       return;
     }
 
-    if (isPlaying) {
+    if (!audio.paused) {
       audio.pause();
+      setIsPlaying(false);
     } else {
-      audio.play().catch(console.error);
+      audio
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+        })
+        .catch((err) => {
+          console.error('Erro ao reproduzir áudio:', err);
+          setIsPlaying(false);
+        });
     }
   };
 
@@ -381,7 +416,7 @@ export function PlayerProvider({ children }) {
     playSong(startSong, trackList);
   };
 
-  // Next Track
+  // Next Track - loops reliably and never breaks audio playback
   const handleNextTrack = () => {
     const activeList = queue.length > 0 ? queue : songs;
     if (activeList.length === 0) return;
@@ -415,13 +450,18 @@ export function PlayerProvider({ children }) {
     }
 
     const currentIndex = activeList.findIndex((s) => s.id === currentSong.id);
-    if (currentIndex !== -1 && currentIndex < activeList.length - 1) {
-      playSong(activeList[currentIndex + 1], activeList);
-    } else if (repeatMode === 'all') {
+    if (currentIndex !== -1) {
+      if (currentIndex < activeList.length - 1) {
+        playSong(activeList[currentIndex + 1], activeList);
+        return;
+      }
+      // If reached the end of list or single track, loop back to start
       playSong(activeList[0], activeList);
-    } else {
-      setIsPlaying(false);
+      return;
     }
+
+    // If current song is not in activeList (e.g. list was changed), play first track
+    playSong(activeList[0], activeList);
   };
 
   // Previous Track
