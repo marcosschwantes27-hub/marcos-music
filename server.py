@@ -3,6 +3,8 @@ import sys
 import json
 import re
 import socket
+import subprocess
+import shutil
 import urllib.parse
 import urllib.request
 import tempfile
@@ -17,6 +19,33 @@ if sys.platform.startswith('win'):
 PORT = int(os.environ.get('PORT', 8085))
 TEMP_DIR = os.path.join(tempfile.gettempdir(), 'furtadomusic_yt')
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+def ensure_deno_installed():
+    """Auto-install deno JS runtime if not found (required by yt-dlp on cloud servers)."""
+    if shutil.which('deno'):
+        print("✓ Deno JS runtime found.")
+        return
+    if sys.platform.startswith('win'):
+        return  # Not needed on Windows (user machines)
+    print("⚙ Deno not found. Installing for yt-dlp YouTube support...")
+    try:
+        deno_dir = os.path.expanduser('~/.deno')
+        subprocess.run(
+            'curl -fsSL https://deno.land/install.sh | sh',
+            shell=True, check=True, timeout=60,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        deno_bin = os.path.join(deno_dir, 'bin')
+        if os.path.isdir(deno_bin):
+            os.environ['PATH'] = deno_bin + ':' + os.environ.get('PATH', '')
+            os.environ['DENO_DIR'] = deno_dir
+            print(f"✓ Deno installed at {deno_bin}")
+        else:
+            print("⚠ Deno install completed but bin dir not found.")
+    except Exception as e:
+        print(f"⚠ Could not install deno: {e}. YouTube downloads may fail.")
+
+ensure_deno_installed()
 
 def get_local_ip():
     try:

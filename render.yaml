@@ -3,5 +3,5 @@ services:
     name: marcosmusic-backend
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && curl -fsSL https://deno.land/install.sh | sh
-    startCommand: export DENO_DIR=/opt/render/.deno && export PATH="/opt/render/.deno/bin:$PATH" && python server.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
