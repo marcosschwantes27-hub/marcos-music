@@ -212,18 +212,28 @@ export default function SpotifyImporter() {
         continue;
       }
 
+      let saved = null;
       try {
         setTrackStatus((prev) => ({ ...prev, [track.id]: 'downloading' }));
-        const saved = await downloadSpotifyTrack(track);
-        if (saved) {
-          collectedSongIds.push(saved.id);
-          if (localPl) {
-            await addTrackToPlaylist(localPl.id, saved.id);
-          }
-          setTrackStatus((prev) => ({ ...prev, [track.id]: 'saved' }));
+        saved = await downloadSpotifyTrack(track);
+      } catch (firstErr) {
+        console.warn(`Tentando novamente baixar ${track.title}...`, firstErr);
+        // Pequena pausa e tenta mais uma vez automaticamente
+        await new Promise((r) => setTimeout(r, 1200));
+        try {
+          saved = await downloadSpotifyTrack(track);
+        } catch (retryErr) {
+          console.warn(`Erro ao baixar faixa ${track.title}:`, retryErr);
         }
-      } catch (e) {
-        console.warn(`Erro ao baixar faixa ${track.title}:`, e);
+      }
+
+      if (saved) {
+        collectedSongIds.push(saved.id);
+        if (localPl) {
+          await addTrackToPlaylist(localPl.id, saved.id);
+        }
+        setTrackStatus((prev) => ({ ...prev, [track.id]: 'saved' }));
+      } else {
         setTrackStatus((prev) => ({ ...prev, [track.id]: 'error' }));
       }
     }

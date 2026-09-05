@@ -47,10 +47,10 @@ def ensure_deno_installed():
 
 ensure_deno_installed()
 
-MIN_AUDIO_SIZE = 500_000  # 500KB minimum to consider a valid full track (not a preview)
+MIN_AUDIO_SIZE = 400_000  # 400KB minimum to consider a valid full track
 
-def _ydl_download(query, extra_opts=None):
-    """Try downloading audio with yt-dlp. Returns filepath or None."""
+def _download_single_video(url):
+    """Download a single video/track directly. Returns filepath or None."""
     out_tmpl = os.path.join(TEMP_DIR, "%(id)s.%(ext)s")
     downloaded_files = []
 
@@ -67,7 +67,6 @@ def _ydl_download(query, extra_opts=None):
         'quiet': True,
         'no_warnings': True,
         'ignoreerrors': True,
-        'max_downloads': 1,
         'overwrites': True,
         'progress_hooks': [hook],
         'geo_bypass': True,
@@ -77,57 +76,92 @@ def _ydl_download(query, extra_opts=None):
             'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
         },
     }
-    if extra_opts:
-        ydl_opts.update(extra_opts)
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            ydl.extract_info(query, download=True)
-        except yt_dlp.utils.MaxDownloadsReached:
-            pass
-        except Exception:
-            pass
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    except Exception as e:
+        print(f"Error downloading candidate {url}: {e}")
+        return None
 
-    filepath = downloaded_files[0] if downloaded_files else None
-    if filepath and os.path.exists(filepath) and os.path.getsize(filepath) >= MIN_AUDIO_SIZE:
-        return filepath
-    # Clean up small files (previews)
-    if filepath and os.path.exists(filepath):
-        try:
-            os.remove(filepath)
-        except Exception:
-            pass
+    if downloaded_files:
+        fp = downloaded_files[0]
+        if os.path.exists(fp) and os.path.getsize(fp) >= MIN_AUDIO_SIZE:
+            return fp
+        if os.path.exists(fp):
+            try:
+                os.remove(fp)
+            except Exception:
+                pass
     return None
 
 def try_download_audio(search_term):
     """
-    Multi-source audio download. Tries YouTube, then SoundCloud.
-    Returns the filepath of the downloaded audio, or None.
+    Ultra-resilient multi-source audio downloader.
+    Uses extract_flat to fetch candidate URLs instantly without throwing errors on unavailable videos,
+    then attempts downloading candidates in order until the first success.
     """
-    sources = [
-        # 1. YouTube (standard - works on local machines)
-        (f"ytsearch5:{search_term} audio", None),
-        # 2. YouTube (alternative search terms)
-        (f"ytsearch5:{search_term} official audio", None),
-        # 3. SoundCloud (works on cloud servers)
-        (f"scsearch5:{search_term}", None),
+    flat_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': True,
+        'noplaylist': True,
+        'ignoreerrors': True,
+    }
+
+    search_queries = [
+        f"ytsearch5:{search_term} audio",
+        f"ytsearch5:{search_term} official audio",
+        f"scsearch3:{search_term}",
     ]
 
-    for query, extra in sources:
-        source_name = query.split(":")[0]
+    candidate_urls = []
+    seen_urls = set()
+
+    for q in search_queries:
         try:
-            filepath = _ydl_download(query, extra)
-            if filepath:
-                size_mb = os.path.getsize(filepath) / 1024 / 1024
-                print(f"✓ Download OK via {source_name}: {os.path.basename(filepath)} ({size_mb:.1f}MB)")
-                return filepath
-            else:
-                print(f"⚠ {source_name}: no valid audio found, trying next source...")
+            with yt_dlp.YoutubeDL(flat_opts) as ydl:
+                res = ydl.extract_info(q, download=False)
+                entries = res.get('entries', []) if res else []
+                for entry in entries:
+                    if not entry:
+                        continue
+                    vid_id = entry.get('id')
+                    raw_url = entry.get('url')
+                    if vid_id and not raw_url:
+                        url = f"https://www.youtube.com/watch?v={vid_id}"
+                    elif raw_url:
+                        url = raw_url if raw_url.startswith('http') else f"https://www.youtube.com/watch?v={raw_url}"
+                    elif vid_id:
+                        url = f"https://www.youtube.com/watch?v={vid_id}"
+                    else:
+                        continue
+
+                    if url not in seen_urls:
+                        seen_urls.add(url)
+                        candidate_urls.append(url)
+                        if len(candidate_urls) >= 6:
+                            break
         except Exception as e:
-            print(f"⚠ {source_name} error: {e}")
+            print(f"Search query error on {q}: {e}")
+
+        if len(candidate_urls) >= 4:
+            break
+
+    print(f"Found {len(candidate_urls)} candidate sources for '{search_term}'")
+
+    for url in candidate_urls:
+        try:
+            fp = _download_single_video(url)
+            if fp:
+                size_mb = os.path.getsize(fp) / 1024 / 1024
+                print(f"✓ Download OK: {os.path.basename(fp)} ({size_mb:.1f}MB) from {url}")
+                return fp
+        except Exception as e:
+            print(f"Candidate {url} failed: {e}")
             continue
 
-    print(f"✗ All sources failed for: {search_term}")
+    print(f"✗ All candidates failed for: {search_term}")
     return None
 
 def get_local_ip():
