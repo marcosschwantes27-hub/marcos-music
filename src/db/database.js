@@ -4,35 +4,53 @@ const DB_NAME = 'MarcosMusicDB';
 const OLD_DB_NAME = 'FurtadoMusicDB';
 const DB_VERSION = 2;
 
+let dbPromise = null;
 let migrationDone = false;
 
 export async function getDB() {
-  const db = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      if (!db.objectStoreNames.contains('songs')) {
-        const songStore = db.createObjectStore('songs', { keyPath: 'id' });
-        songStore.createIndex('dateAdded', 'dateAdded');
-        songStore.createIndex('isLiked', 'isLiked');
-        songStore.createIndex('artist', 'artist');
-        songStore.createIndex('album', 'album');
-      }
+  if (!dbPromise) {
+    dbPromise = openDB(DB_NAME, DB_VERSION, {
+      blocked(currentVersion, blockedVersion) {
+        console.warn('IndexedDB upgrade blocked by another connection:', { currentVersion, blockedVersion });
+      },
+      blocking(currentVersion, blockedVersion) {
+        console.warn('IndexedDB upgrade in progress, closing connection');
+        if (dbPromise) {
+          dbPromise.then((db) => db.close()).catch(() => {});
+          dbPromise = null;
+        }
+      },
+      terminated() {
+        dbPromise = null;
+      },
+      upgrade(db) {
+        if (!db.objectStoreNames.contains('songs')) {
+          const songStore = db.createObjectStore('songs', { keyPath: 'id' });
+          songStore.createIndex('dateAdded', 'dateAdded');
+          songStore.createIndex('isLiked', 'isLiked');
+          songStore.createIndex('artist', 'artist');
+          songStore.createIndex('album', 'album');
+        }
 
-      if (!db.objectStoreNames.contains('playlists')) {
-        const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
-        playlistStore.createIndex('createdAt', 'createdAt');
-      }
+        if (!db.objectStoreNames.contains('playlists')) {
+          const playlistStore = db.createObjectStore('playlists', { keyPath: 'id' });
+          playlistStore.createIndex('createdAt', 'createdAt');
+        }
 
-      if (!db.objectStoreNames.contains('settings')) {
-        db.createObjectStore('settings', { keyPath: 'key' });
-      }
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' });
+        }
 
-      if (!db.objectStoreNames.contains('downloadQueue')) {
-        const queueStore = db.createObjectStore('downloadQueue', { keyPath: 'id' });
-        queueStore.createIndex('status', 'status');
-        queueStore.createIndex('createdAt', 'createdAt');
-      }
-    },
-  });
+        if (!db.objectStoreNames.contains('downloadQueue')) {
+          const queueStore = db.createObjectStore('downloadQueue', { keyPath: 'id' });
+          queueStore.createIndex('status', 'status');
+          queueStore.createIndex('createdAt', 'createdAt');
+        }
+      },
+    });
+  }
+
+  const db = await dbPromise;
 
   // Seamlessly migrate previous downloads if any
   if (!migrationDone) {

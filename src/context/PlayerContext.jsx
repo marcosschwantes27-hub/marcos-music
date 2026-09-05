@@ -60,6 +60,13 @@ export function PlayerProvider({ children }) {
 
   // Load songs, playlists, and download queue from IndexedDB on startup
   useEffect(() => {
+    let isMounted = true;
+    const safetyTimer = setTimeout(() => {
+      if (isMounted) {
+        setIsLoading(false);
+      }
+    }, 1500);
+
     async function loadData() {
       try {
         // Clear all songs if requested by user
@@ -73,26 +80,34 @@ export function PlayerProvider({ children }) {
           db.getAllPlaylists(),
           db.getAllQueueItems(),
         ]);
-        setSongs(loadedSongs);
-        setPlaylists(loadedPlaylists);
 
-        // Sanitize queue: reset any interrupted 'downloading' status to 'pending' so it automatically resumes
-        const sanitizedQueue = (loadedQueue || []).map((item) => {
-          if (item.status === 'downloading') {
-            return { ...item, status: 'pending' };
-          }
-          return item;
-        });
-        setDownloadQueue(sanitizedQueue);
+        if (isMounted) {
+          setSongs(loadedSongs || []);
+          setPlaylists(loadedPlaylists || []);
+
+          // Sanitize queue: reset any interrupted 'downloading' status to 'pending' so it automatically resumes
+          const sanitizedQueue = (loadedQueue || []).map((item) => {
+            if (item.status === 'downloading') {
+              return { ...item, status: 'pending' };
+            }
+            return item;
+          });
+          setDownloadQueue(sanitizedQueue);
+        }
       } catch (err) {
         console.error('Erro ao carregar dados do IndexedDB:', err);
       } finally {
-        setIsLoading(false);
+        clearTimeout(safetyTimer);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     }
     loadData();
 
     return () => {
+      isMounted = false;
+      clearTimeout(safetyTimer);
       // Clean up audio and cover URLs
       if (currentObjectUrlRef.current) {
         URL.revokeObjectURL(currentObjectUrlRef.current);

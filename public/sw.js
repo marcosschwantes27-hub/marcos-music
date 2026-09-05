@@ -1,26 +1,36 @@
-const CACHE_NAME = 'marcosmusic-v1';
+const CACHE_NAME = 'marcosmusic-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/marcos-music-icon.png',
   '/icon-192.png',
   '/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {
+  // Precache initial shell assets
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE);
+      return cache.addAll(ASSETS_TO_CACHE).catch((err) => {
+        console.warn('Pre-caching assets failed:', err);
+      });
     })
   );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
+  // Clean up any old caches (v1 and earlier)
   event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => {
+            console.log('Purging old service worker cache:', key);
+            return caches.delete(key);
+          })
       );
     })
   );
@@ -28,21 +38,66 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Let API calls pass through to network
-  if (event.request.url.includes('/api/')) {
+  const request = event.request;
+  const url = new URL(request.url);
+
+  // 1. Bypass Service Worker completely for API calls and non-GET requests
+  if (request.method !== 'GET' || url.pathname.startsWith('/api') || url.origin !== self.location.origin) {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      return (
-        cachedResponse ||
-        fetch(event.request).catch(() => {
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
+  // 2. Navigation / HTML requests: NETWORK-FIRST strategy
+  // This prevents the white-screen bug caused by stale index.html pointing to old JS bundle hashes
+  const isNavigation =
+    request.mode === 'navigate' ||
+    request.headers.get('accept')?.includes('text/html') ||
+    url.pathname === '/' ||
+    url.pathname === '/index.html';
+
+  if (isNavigation) {
+    event.respondWith(
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
           }
+          return networkResponse;
         })
-      );
+        .catch(async () => {
+          // If network is unreachable (offline mode), fallback to cached index.html
+          const cached =
+            (await caches.match(request)) ||
+            (await caches.match('/index.html')) ||
+            (await caches.match('/'));
+          if (cached) return cached;
+          return new Response('Modo offline ativo. Reconecte-se para carregar novidades.', {
+            headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          });
+        })
+    );
+    return;
+  }
+
+  // 3. Static Assets (JS, CSS, Images, Fonts): Cache-First with Network fallback
+  event.respondWith(
+    caches.match(request).then((cachedResponse) => {
+      if (cachedResponse) {
+        return cachedResponse;
+      }
+      return fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(() => null);
     })
   );
 });
@@ -58,7 +113,6 @@ self.addEventListener('backgroundfetchsuccess', (event) => {
         const records = await bgFetch.matchAll();
         for (const record of records) {
           const response = await record.responseReady;
-          // Notify any open clients about the completed background download
           const clients = await self.clients.matchAll({ type: 'window' });
           clients.forEach((client) => {
             client.postMessage({

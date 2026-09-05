@@ -33,3 +33,5 @@ __pycache__/
 android/app/build/
 android/.gradle/
 *.apk
+
+.vercel
