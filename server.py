@@ -47,6 +47,89 @@ def ensure_deno_installed():
 
 ensure_deno_installed()
 
+MIN_AUDIO_SIZE = 500_000  # 500KB minimum to consider a valid full track (not a preview)
+
+def _ydl_download(query, extra_opts=None):
+    """Try downloading audio with yt-dlp. Returns filepath or None."""
+    out_tmpl = os.path.join(TEMP_DIR, "%(id)s.%(ext)s")
+    downloaded_files = []
+
+    def hook(d):
+        if d.get('status') == 'finished':
+            fn = d.get('filename')
+            if fn:
+                downloaded_files.append(fn)
+
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': out_tmpl,
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'ignoreerrors': True,
+        'max_downloads': 1,
+        'overwrites': True,
+        'progress_hooks': [hook],
+        'geo_bypass': True,
+        'nocheckcertificate': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+    }
+    if extra_opts:
+        ydl_opts.update(extra_opts)
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            ydl.extract_info(query, download=True)
+        except yt_dlp.utils.MaxDownloadsReached:
+            pass
+        except Exception:
+            pass
+
+    filepath = downloaded_files[0] if downloaded_files else None
+    if filepath and os.path.exists(filepath) and os.path.getsize(filepath) >= MIN_AUDIO_SIZE:
+        return filepath
+    # Clean up small files (previews)
+    if filepath and os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+        except Exception:
+            pass
+    return None
+
+def try_download_audio(search_term):
+    """
+    Multi-source audio download. Tries YouTube, then SoundCloud.
+    Returns the filepath of the downloaded audio, or None.
+    """
+    sources = [
+        # 1. YouTube (standard - works on local machines)
+        (f"ytsearch5:{search_term} audio", None),
+        # 2. YouTube (alternative search terms)
+        (f"ytsearch5:{search_term} official audio", None),
+        # 3. SoundCloud (works on cloud servers)
+        (f"scsearch5:{search_term}", None),
+    ]
+
+    for query, extra in sources:
+        source_name = query.split(":")[0]
+        try:
+            filepath = _ydl_download(query, extra)
+            if filepath:
+                size_mb = os.path.getsize(filepath) / 1024 / 1024
+                print(f"✓ Download OK via {source_name}: {os.path.basename(filepath)} ({size_mb:.1f}MB)")
+                return filepath
+            else:
+                print(f"⚠ {source_name}: no valid audio found, trying next source...")
+        except Exception as e:
+            print(f"⚠ {source_name} error: {e}")
+            continue
+
+    print(f"✗ All sources failed for: {search_term}")
+    return None
+
 def get_local_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -390,56 +473,12 @@ class AudioRequestHandler(BaseHTTPRequestHandler):
             try:
                 clean_title = re.sub(r'[/\\?%*:|"<>#]', '', title)
                 clean_artist = re.sub(r'[/\\?%*:|"<>#]', '', artist)
-                query = f"ytsearch5:{clean_title} {clean_artist} audio"
-                out_tmpl = os.path.join(TEMP_DIR, "%(id)s.%(ext)s")
+                search_term = f"{clean_title} {clean_artist}"
 
-                downloaded_files = []
-                def on_progress_hook(d):
-                    if d.get('status') == 'finished':
-                        fn = d.get('filename')
-                        if fn:
-                            downloaded_files.append(fn)
+                filepath = try_download_audio(search_term)
 
-                ydl_opts = {
-                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                    'outtmpl': out_tmpl,
-                    'noplaylist': True,
-                    'quiet': True,
-                    'no_warnings': True,
-                    'ignoreerrors': True,
-                    'max_downloads': 1,
-                    'overwrites': True,
-                    'progress_hooks': [on_progress_hook],
-                    'geo_bypass': True,
-                    'nocheckcertificate': True,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['ios', 'mweb'],
-                        }
-                    },
-                }
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    try:
-                        ydl.extract_info(query, download=True)
-                    except yt_dlp.utils.MaxDownloadsReached:
-                        pass
-
-                filepath = downloaded_files[0] if downloaded_files else None
-                if not filepath or not os.path.exists(filepath):
-                    # Check recent files in TEMP_DIR as fallback
-                    recent = [os.path.join(TEMP_DIR, f) for f in os.listdir(TEMP_DIR)]
-                    recent = [f for f in recent if os.path.isfile(f) and any(f.endswith(ext) for ext in ['.m4a', '.webm', '.opus', '.mp3'])]
-                    if recent:
-                        recent.sort(key=os.path.getmtime, reverse=True)
-                        filepath = recent[0]
-
-                if not filepath or not os.path.exists(filepath):
-                    raise Exception("Nenhum áudio público encontrado para esta faixa.")
+                if not filepath:
+                    raise Exception("Nenhum áudio encontrado para esta faixa. Tente pelo app desktop.")
 
                 file_size = os.path.getsize(filepath)
                 ext = os.path.splitext(filepath)[1].lower()
